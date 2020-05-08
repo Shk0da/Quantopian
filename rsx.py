@@ -40,7 +40,7 @@ def initialize(context):
     schedule_function(select_stocks_and_set_weights, date_rules.week_start(), time_rules.market_open(minutes = 1))  
     schedule_function(trade, date_rules.week_start(), time_rules.market_open(minutes = 1))  
     # Metrics
-    schedule_function(record_metrics, date_rules.month_start(days_offset=1), time_rules.market_open(minutes=60))    
+    schedule_function(record_metrics, date_rules.every_day(), time_rules.market_open(minutes=60))
  
 def make_pipeline(context):  
     spy_ma50_slice = SMA(inputs=[USEquityPricing.close], window_length=context.TF_CURRENT_LOOKBACK)[context.SPY]  
