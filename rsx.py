@@ -1,6 +1,6 @@
 import quantopian.algorithm as algo
 from quantopian.pipeline import Pipeline
-from quantopian.pipeline.filters import Q500US, Q3000US, QTradableStocksUS  
+from quantopian.pipeline.filters import Q3000US  
 from quantopian.pipeline.factors import SimpleMovingAverage as SMA  
 from quantopian.pipeline.factors import CustomFactor, Returns
 from quantopian.pipeline.data.builtin import USEquityPricing  
@@ -8,18 +8,21 @@ from quantopian.pipeline.data.morningstar import Fundamentals as ms
 import quantopian.optimize as opt  
 import pandas as pd
  
-def initialize(context):  
+def initialize(context):
+    # Research benchmark: RTS (Russia in $)
+    set_benchmark(symbol('RSX'))
     # List of bond ETFs when market is down. Can be more than one.
     context.BONDS = [symbol('IEF'), symbol('TLT')]
  
+    # First sort by ROE
+    context.TOP_ROE_QTY = 50 
     # Set target number of securities to hold and top ROE qty to filter  
-    context.TARGET_SECURITIES = 5 
-    context.TOP_ROE_QTY = 60 #First sort by ROE
+    context.TARGET_SECURITIES = 5
  
     # This is for the trend following filter  
     context.SPY = symbol('IWM')
-    context.TF_LOOKBACK = 100
-    context.TF_CURRENT_LOOKBACK = 10
+    context.TF_LOOKBACK = 50
+    context.TF_CURRENT_LOOKBACK = 5
  
     # This is for the determining momentum  
     context.MOMENTUM_LOOKBACK_DAYS = 126 #Momentum lookback  
@@ -27,16 +30,17 @@ def initialize(context):
     # Initialize any other variables before being used  
     context.stock_weights = pd.Series()  
     context.bond_weights = pd.Series()
-    
-    MIN = 1
  
     # Should probably comment out the slippage and using the default  
     # Create and attach pipeline for fetching all data  
     algo.attach_pipeline(make_pipeline(context), 'pipeline')  
+    
     # Schedule functions  
     # Separate the stock selection from the execution for flexibility  
-    schedule_function(select_stocks_and_set_weights, date_rules.week_start(), time_rules.market_open(minutes = MIN))  
-    schedule_function(trade, date_rules.week_start(), time_rules.market_open(minutes = MIN))   
+    schedule_function(select_stocks_and_set_weights, date_rules.week_start(), time_rules.market_open(minutes = 1))  
+    schedule_function(trade, date_rules.week_start(), time_rules.market_open(minutes = 1))  
+    # Metrics
+    schedule_function(record_metrics, date_rules.month_start(days_offset=1), time_rules.market_open(minutes=60))    
  
 def make_pipeline(context):  
     spy_ma50_slice = SMA(inputs=[USEquityPricing.close], window_length=context.TF_CURRENT_LOOKBACK)[context.SPY]  
@@ -48,12 +52,15 @@ def make_pipeline(context):
     # Filters for top quality and momentum to use in our selection criteria  
     universe = Q3000US() 
     quality = ms.long_term_debt_equity_ratio.latest.rank(mask=universe)
-    top_quality = quality.top(context.TOP_ROE_QTY, mask=universe)  
+    top_quality = quality.top(context.TOP_ROE_QTY, mask=universe)
+    
+    shifted_quality = ms.total_debt_equity_ratio.latest.rank(mask=top_quality)
+    shifted_top = shifted_quality.bottom(context.TOP_ROE_QTY - context.TARGET_SECURITIES, mask=top_quality)
     
     returns_overall = Returns(window_length=context.MOMENTUM_LOOKBACK_DAYS + context.MOMENTUM_SKIP_DAYS)  
     returns_recent = Returns(window_length=context.MOMENTUM_SKIP_DAYS)  
     momentum = returns_overall - returns_recent  
-    top_quality_momentum = momentum.top(context.TARGET_SECURITIES, mask=top_quality) 
+    top_quality_momentum = momentum.top(context.TARGET_SECURITIES, mask=shifted_top)
     
     # Only return values we will use in our selection criteria  
     pipe = Pipeline(
@@ -101,3 +108,7 @@ def trade(context, data):
     constraints = []
     constraints.append(opt.MaxGrossExposure(1.0))
     order_optimal_portfolio(objective = target_weights, constraints = constraints)
+
+def record_metrics(context, data):
+    avaliable_cash = context.portfolio.cash + context.portfolio.portfolio_value
+    record(usd = avaliable_cash)
